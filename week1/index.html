@@ -156,17 +156,82 @@
             const lunchMenu = [
                 { name: "Pizza", icon: "fas fa-pizza-slice" },
                 { name: "Sushi", icon: "fas fa-fish" },
-                { name: "Burger", icon: "fas fa-burger" },
+                { name: "Burger", icon: "fas fa-hamburger" },
                 { name: "Salad", icon: "fas fa-leaf" },
                 { name: "Tacos", icon: "fas fa-utensil-spoon" },
                 { name: "Ramen", icon: "fas fa-bowl-rice" },
                 { name: "Sandwich", icon: "fas fa-bread-slice" },
-                { name: "Pasta", icon: "fas fa-bowl-food" },
+                { name: "Pasta", icon: "fas fa-plate-wheat" },
                 { name: "Curry", icon: "fas fa-mortar-pestle" },
                 { name: "Steak", icon: "fas fa-drumstick-bite" },
-                { name: "Soup", icon: "fas fa-mug-hot" },
+                { name: "Soup", icon: "fas fa-bowl-food" },
                 { name: "BBQ", icon: "fas fa-fire" }
             ];
+            
+            // Restore or initialize the shuffle-bag state before the first pick
+            // (after lunchMenu is declared — buildDeck/loadLunchState need it).
+            const lunchState = loadLunchState() || {
+                deck: buildDeck(),
+                lastIndex: null,
+                menu: lunchMenu.map(m => m.name)
+            };
+
+            // ---- Shuffle-bag picker (perceived-randomness fix) ----
+            // Naive i.i.d. uniform draws repeat the same meal on consecutive days
+            // ~364/12 ≈ 30 times per year, which users read as "broken". We draw
+            // WITHOUT replacement from a shuffled deck of all meals: every meal appears
+            // exactly once per 12-pick cycle, so long-run per-meal frequency stays 1/12.
+            // A boundary guard also blocks the first pick of a fresh deck from repeating
+            // the last pick of the old deck, so two identical meals never land on
+            // consecutive days. The remaining deck + last pick persist in localStorage,
+            // so the guarantee survives page reloads between days; without storage the
+            // app degrades to a per-session deck.
+            const LUNCH_STATE_KEY = 'lunch-picker-state-v1';
+            
+            function buildDeck() {
+                const deck = lunchMenu.map((_, i) => i);
+                for (let i = deck.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [deck[i], deck[j]] = [deck[j], deck[i]];
+                }
+                return deck;
+            }
+            
+            function loadLunchState() {
+                try {
+                    const raw = localStorage.getItem(LUNCH_STATE_KEY);
+                    if (!raw) return null;
+                    const state = JSON.parse(raw);
+                    // Rebuild the deck if the menu changed (items added/removed/reordered).
+                    if (!state || !Array.isArray(state.deck) ||
+                        JSON.stringify(state.menu) !== JSON.stringify(lunchMenu.map(m => m.name))) {
+                        return null;
+                    }
+                    return state;
+                } catch (err) {
+                    return null; // storage disabled (private mode etc.) -> per-session deck
+                }
+            }
+            
+            function saveLunchState(state) {
+                try {
+                    localStorage.setItem(LUNCH_STATE_KEY, JSON.stringify(state));
+                } catch (err) { /* non-fatal */ }
+            }
+            
+            function pickFromDeck(state) {
+                if (state.deck.length === 0) {
+                    state.deck = buildDeck();
+                    // Boundary guard: never start a fresh deck with yesterday's meal.
+                    if (state.lastIndex !== null && state.deck[0] === state.lastIndex && state.deck.length > 1) {
+                        const swapPos = 1 + Math.floor(Math.random() * (state.deck.length - 1));
+                        [state.deck[0], state.deck[swapPos]] = [state.deck[swapPos], state.deck[0]];
+                    }
+                }
+                const index = state.deck.shift();
+                state.lastIndex = index;
+                return lunchMenu[index];
+            }
             
             // Function to generate random lunch
             function generateRandomLunch() {
@@ -174,8 +239,8 @@
                 lunchDisplay.classList.remove('fade-in');
                 
                 // Get a random lunch option
-                const randomIndex = Math.floor(Math.random() * lunchMenu.length);
-                const selectedLunch = lunchMenu[randomIndex];
+                const selectedLunch = pickFromDeck(lunchState);
+                saveLunchState(lunchState);
                 
                 // Briefly show loading state
                 foodIcon.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
